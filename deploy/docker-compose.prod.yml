@@ -1,0 +1,106 @@
+services:
+  # ── 1. VajraNetra ZTNA Backend & PDP Control Plane ──────────────────────
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: vajranetra-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=production
+      - DEBUG=false
+      - DATABASE_URL=postgresql://ztna_user:ztna_password@postgres:5432/ztna_db
+      - REDIS_URL=redis://redis:6379/0
+      - OPA_URL=http://opa:8181/v1/data/ztna/allow
+      - ENABLE_OPA=true
+      - SECRET_KEY=${SECRET_KEY:-default_super_secure_vault_secret_2026}
+      - PEP_GATEWAY_SECRET=${PEP_GATEWAY_SECRET:-default_pep_hmac_secret_2026}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      opa:
+        condition: service_started
+
+  # ── 2. VajraNetra Drop-In PEP Reverse Proxy Gateway ─────────────────────
+  gateway:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command: python -m app.dropin --upstream http://upstream-app:3000 --port 8080
+    container_name: vajranetra-gateway
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-default_super_secure_vault_secret_2026}
+    depends_on:
+      - backend
+
+  # ── 3. Open Policy Agent (OPA) ──────────────────────────────────────────
+  opa:
+    image: openpolicyagent/opa:latest-envoy
+    container_name: vajranetra-opa
+    restart: unless-stopped
+    ports:
+      - "8181:8181"
+    volumes:
+      - ../opa/policy.rego:/etc/opa/policy.rego:ro
+    command:
+      - "run"
+      - "--server"
+      - "--log-level=info"
+      - "/etc/opa/policy.rego"
+
+  # ── 4. High-Performance Redis Bus & Cache ──────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: vajranetra-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── 5. Enterprise PostgreSQL Database ───────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: vajranetra-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=ztna_user
+      - POSTGRES_PASSWORD=ztna_password
+      - POSTGRES_DB=ztna_db
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ztna_user -d ztna_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── 6. Next.js SOC Dashboard Frontend ───────────────────────────────────
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: vajranetra-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+    driver: local

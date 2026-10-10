@@ -1,0 +1,23 @@
+services:
+  vajranetra-envoy-edge:
+    image: envoyproxy/envoy:v1.30-latest
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+    ports:
+      - "18080:8080" # Exposed ingress port
+      - "9901:9901"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - ztna_net
+
+  upstream-echo:
+    image: jmalloc/echo-server
+    ports:
+      - "3000:8080"
+    networks:
+      - ztna_net
+
+networks:
+  ztna_net:
+    driver: bridge

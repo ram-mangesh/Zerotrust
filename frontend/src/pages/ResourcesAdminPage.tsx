@@ -1,0 +1,387 @@
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import {
+  apiErrorMessage, createResource, disableResource, exportVault, getResources,
+  updateResource, uploadResourceFile, type ResourceReachability,
+} from "../api/client";
+import { usePermissions } from "../auth/usePermissions";
+import ConfirmAction from "../components/ConfirmAction";
+import Page, { Card, Empty } from "../components/layout/Page";
+
+const SENSITIVITIES = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"];
+
+const EMPTY_FORM = {
+  slug: "", name: "", description: "", category: "application",
+  sensitivity: "INTERNAL", owner: "",
+};
+
+// Mirrors the server's allowlist exactly (see backend resource file guards).
+const ALLOWED_FILE_TYPES = [
+  "application/pdf", "text/plain", "text/markdown", "text/csv",
+  "application/json", "image/png", "image/jpeg", "image/webp",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+];
+const ACCEPT_ATTR =
+  ".pdf,.txt,.md,.csv,.json,.png,.jpg,.jpeg,.webp,.docx,.xlsx,.pptx," +
+  ALLOWED_FILE_TYPES.join(",");
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
+
+/**
+ * The catalogue, as an administrator sees it: what exists, what it protects,
+ * and what file sits behind it. Analysts get the same view without controls.
+ *
+ * Loaded with `includeDisabled` so a disabled resource stays visible (and
+ * recoverable via Enable) instead of vanishing the moment it is disabled —
+ * disabling is a soft-delete on the backend, not a real deletion.
+ */
+export default function ResourcesAdminPage() {
+  const { can } = usePermissions();
+  const writable = can("resources:write");
+  const [resources, setResources] = useState<ResourceReachability[]>([]);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [pendingDisable, setPendingDisable] = useState<ResourceReachability | null>(null);
+  const [vaultTarget, setVaultTarget] = useState<ResourceReachability | null>(null);
+  const [vaultPass, setVaultPass] = useState("");
+  const [vaultBusy, setVaultBusy] = useState(false);
+
+  const load = useCallback(() => {
+    getResources(true).then(setResources).catch(() => setResources([]));
+  }, []);
+
+  useEffect(load, [load]);
+
+  async function onCreate(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await createResource(form);
+      setForm(EMPTY_FORM);
+      load();
+    } catch (err) {
+      setError(apiErrorMessage(err, "Could not create the resource."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onUpload(slug: string, file: File) {
+    setError("");
+    if (file.size > MAX_FILE_BYTES) {
+      setError(
+        `"${file.name}" is ${(file.size / (1024 * 1024)).toFixed(1)} MB, over the 25 MB limit. Choose a smaller file.`,
+      );
+      return;
+    }
+    try {
+      await uploadResourceFile(slug, file);
+      load();
+    } catch (err) {
+      setError(apiErrorMessage(err, "Upload failed."));
+    }
+  }
+
+  async function onDisable(resource: ResourceReachability) {
+    setError("");
+    try {
+      await disableResource(resource.slug);
+      load();
+    } catch (err) {
+      setError(apiErrorMessage(err, "Could not disable the resource."));
+    }
+  }
+
+  async function onEnable(slug: string) {
+    setError("");
+    try {
+      await updateResource(slug, { enabled: true });
+      load();
+    } catch (err) {
+      setError(apiErrorMessage(err, "Could not re-enable the resource."));
+    }
+  }
+
+  async function onSetFloor(slug: string, value: number) {
+    setError("");
+    try {
+      await updateResource(slug, { min_trust_score: value });
+      load();
+    } catch (err) {
+      setError(apiErrorMessage(err, "Could not update the resource."));
+    }
+  }
+
+  return (
+    <Page
+      title="Resources"
+      description="The protected catalogue. A resource's sensitivity and trust floor decide who reaches it; the attached file is what they receive."
+    >
+      {error && (
+        <div className="mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-risk-critical">
+          {error}
+        </div>
+      )}
+
+      {pendingDisable && (
+        <div className="mb-4">
+          <ConfirmAction
+            title={`Disable "${pendingDisable.name}"?`}
+            description="It stops being reachable and drops out of the default catalogue view, but it is not deleted — you can re-enable it here at any time."
+            confirmLabel="Disable resource"
+            destructive
+            onConfirm={() => {
+              onDisable(pendingDisable);
+              setPendingDisable(null);
+            }}
+            onCancel={() => setPendingDisable(null)}
+          />
+        </div>
+      )}
+
+      {writable && (
+        <div className="mb-4">
+          <Card title="Publish a resource">
+            <form onSubmit={onCreate} className="grid gap-3 sm:grid-cols-2">
+              <input
+                required
+                placeholder="slug (lowercase, hyphens)"
+                pattern="[a-z0-9-]+"
+                value={form.slug}
+                onChange={(e) => setForm({ ...form, slug: e.target.value })}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              />
+              <input
+                required
+                placeholder="Display name"
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              />
+              <input
+                placeholder="Description"
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm sm:col-span-2"
+              />
+              <input
+                placeholder="Owner (team)"
+                value={form.owner}
+                onChange={(e) => setForm({ ...form, owner: e.target.value })}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              />
+              <select
+                value={form.sensitivity}
+                onChange={(e) => setForm({ ...form, sensitivity: e.target.value })}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                aria-label="Sensitivity"
+              >
+                {SENSITIVITIES.map((level) => (
+                  <option key={level} value={level}>{level}</option>
+                ))}
+              </select>
+              <button
+                type="submit"
+                disabled={busy}
+                className="rounded-lg bg-shell px-4 py-2 text-sm font-medium text-white disabled:opacity-50 sm:col-span-2"
+              >
+                {busy ? "Publishing…" : "Publish resource"}
+              </button>
+            </form>
+            <p className="mt-2 text-xs text-slate-500">
+              The trust floor defaults to the sensitivity's own minimum. Attach a
+              file below once the resource exists.
+            </p>
+          </Card>
+        </div>
+      )}
+
+      <Card title={`Catalogue (${resources.length})`}>
+        {resources.length === 0 ? (
+          <Empty>No resources published yet.</Empty>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-slate-200 text-sm">
+              <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-3 py-2 font-medium">Resource</th>
+                  <th className="px-3 py-2 font-medium">Sensitivity</th>
+                  <th className="px-3 py-2 font-medium">Floor</th>
+                  <th className="px-3 py-2 font-medium">File</th>
+                  {writable && <th className="px-3 py-2 font-medium">Actions</th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {resources.map((resource) => (
+                  <tr
+                    key={resource.id}
+                    className={resource.enabled ? "" : "opacity-50"}
+                  >
+                    <td className="px-3 py-2">
+                      <div className="font-medium text-slate-900">
+                        {resource.name}
+                        {!resource.enabled && (
+                          <span className="ml-2 rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                            Disabled
+                          </span>
+                        )}
+                      </div>
+                      <div className="font-mono text-[11px] text-slate-400">
+                        {resource.slug} · {resource.owner}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-xs text-slate-700">
+                      {resource.sensitivity}
+                    </td>
+                    <td className="px-3 py-2">
+                      {writable ? (
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          defaultValue={resource.min_trust_score}
+                          onBlur={(e) => {
+                            const value = Number(e.target.value);
+                            if (value !== resource.min_trust_score) {
+                              onSetFloor(resource.slug, value);
+                            }
+                          }}
+                          className="w-20 rounded border border-slate-300 px-2 py-1 font-mono text-xs"
+                          aria-label={`Trust floor for ${resource.name}`}
+                        />
+                      ) : (
+                        <span className="font-mono text-xs">
+                          {resource.min_trust_score}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-slate-600">
+                      {resource.has_file ? (
+                        <>
+                          {resource.file_name}
+                          <span className="ml-1 text-slate-400">
+                            ({resource.content_type})
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-amber-700">no file</span>
+                      )}
+                    </td>
+                    {writable && (
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <label className="cursor-pointer rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50">
+                            {resource.has_file ? "Replace" : "Upload"}
+                            <input
+                              type="file"
+                              accept={ACCEPT_ATTR}
+                              className="hidden"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) onUpload(resource.slug, file);
+                                e.target.value = "";
+                              }}
+                            />
+                          </label>
+                          {resource.has_file && (
+                            <button
+                              onClick={() => {
+                                setVaultTarget(resource);
+                                setVaultPass("");
+                              }}
+                              className="rounded border border-red-300 bg-red-50 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
+                              title="Export as Zero-Trust Self-Destructing Vault"
+                            >
+                              Vault (.py)
+                            </button>
+                          )}
+                          {resource.enabled ? (
+                            <button
+                              onClick={() => setPendingDisable(resource)}
+                              className="rounded border border-slate-300 px-2 py-1 text-xs text-risk-critical hover:bg-red-50"
+                            >
+                              Disable
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => onEnable(resource.slug)}
+                              className="rounded border border-emerald-300 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50"
+                            >
+                              Enable
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      {vaultTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl ring-1 ring-slate-900/10">
+            <h3 className="text-base font-semibold text-slate-900">
+              Export Self-Destructing Vault: {vaultTarget.name}
+            </h3>
+            <p className="mt-2 text-xs text-slate-600">
+              The asset will be AES-256 encrypted into a standalone Python runner. If opened with an incorrect password, it triggers a 3-pass DoD cryptographic wipe and deletes itself immediately.
+            </p>
+
+            <div className="mt-4">
+              <label className="block text-xs font-medium text-slate-700">
+                Set Decryption Password:
+              </label>
+              <input
+                type="password"
+                value={vaultPass}
+                onChange={(e) => setVaultPass(e.target.value)}
+                placeholder="Enter strong password (min 4 chars)..."
+                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+              />
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setVaultTarget(null)}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={vaultBusy || vaultPass.length < 4}
+                onClick={async () => {
+                  setVaultBusy(true);
+                  try {
+                    const blob = await exportVault(vaultTarget.slug, vaultPass, 1);
+                    const dlUrl = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = dlUrl;
+                    a.download = `SecureVault_${vaultTarget.slug}.py`;
+                    a.click();
+                    URL.revokeObjectURL(dlUrl);
+                    setVaultTarget(null);
+                  } catch {
+                    alert("Failed to export vault.");
+                  } finally {
+                    setVaultBusy(false);
+                  }
+                }}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {vaultBusy ? "Packaging…" : "Download Secure Container (.py)"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </Page>
+  );
+}

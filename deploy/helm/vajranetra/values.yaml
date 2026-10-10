@@ -1,0 +1,101 @@
+replicaCount: 2
+
+image:
+  repository: vajranetra/ztna-backend
+  pullPolicy: IfNotPresent
+  tag: "1.0.0"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+    - ALL
+
+service:
+  type: ClusterIP
+  port: 8000
+  gatewayPort: 8080
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/proxy-body-size: "64m"
+  hosts:
+    - host: ztna.securecorp.local
+      paths:
+        - path: /
+          pathType: Prefix
+          port: 8000
+  tls:
+    - secretName: vajranetra-tls
+      hosts:
+        - ztna.securecorp.local
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1024Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 75
+  targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+config:
+  appEnv: "production"
+  debug: false
+  sqlEcho: false
+  riskLowMin: 80
+  riskMediumMin: 50
+  riskHighMin: 20
+  enableOpa: true
+  opaUrl: "http://opa-service:8181/v1/data/ztna/allow"
+
+secrets:
+  secretKey: "generate-a-secure-64-byte-key-here"
+  jwtAlgorithm: "HS256"
+  pepGatewaySecret: "generate-pep-hmac-secret-here"
+  databaseUrl: "postgresql://ztna_user:ztna_password@postgres-service:5432/ztna_db"
+  redisUrl: "redis://:redis_password@redis-service:6379/0"
+
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: true
+    password: "redis-cluster-secure-pass"
+
+postgresql:
+  enabled: true
+  auth:
+    username: ztna_user
+    password: "postgres-cluster-secure-pass"
+    database: ztna_db

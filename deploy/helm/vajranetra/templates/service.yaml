@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vajranetra.fullname" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "vajranetra.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: http-api
+      protocol: TCP
+      name: http-api
+    - port: {{ .Values.service.gatewayPort }}
+      targetPort: http-gateway
+      protocol: TCP
+      name: http-gateway
+  selector:
+    app.kubernetes.io/name: {{ include "vajranetra.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}

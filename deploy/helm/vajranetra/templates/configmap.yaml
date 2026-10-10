@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vajranetra.fullname" . }}-config
+  labels:
+    app.kubernetes.io/name: {{ include "vajranetra.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  APP_ENV: {{ .Values.config.appEnv | quote }}
+  DEBUG: {{ .Values.config.debug | quote }}
+  SQL_ECHO: {{ .Values.config.sqlEcho | quote }}
+  RISK_LOW_MIN: {{ .Values.config.riskLowMin | quote }}
+  RISK_MEDIUM_MIN: {{ .Values.config.riskMediumMin | quote }}
+  RISK_HIGH_MIN: {{ .Values.config.riskHighMin | quote }}
+  ENABLE_OPA: {{ .Values.config.enableOpa | quote }}
+  OPA_URL: {{ .Values.config.opaUrl | quote }}

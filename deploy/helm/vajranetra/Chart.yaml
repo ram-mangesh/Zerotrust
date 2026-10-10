@@ -1,0 +1,16 @@
+apiVersion: v2
+name: vajranetra
+description: VajraNetra Zero Trust Network Access (ZTNA) with C-BTA Adaptive Trust & Reverse Proxy
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - zero-trust
+  - ztna
+  - security
+  - reverse-proxy
+  - waf
+  - ai-anomaly-detection
+maintainers:
+  - name: VajraNetra Team
+    email: security@vajranetra.io

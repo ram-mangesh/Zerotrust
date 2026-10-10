@@ -1,0 +1,127 @@
+admin:
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 9901
+static_resources:
+  listeners:
+  - name: ztna_ingress_listener
+    address:
+      socket_address:
+        address: 0.0.0.0
+        port_value: 8080
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: ztna_ingress_http
+          
+          # Forward identity headers seamlessly to upstream
+          forward_client_cert_details: SANITIZE_SET
+          set_current_client_cert_details:
+            subject: true
+
+          route_config:
+            name: local_route
+            virtual_hosts:
+            - name: upstream_service
+              domains: ["*"]
+              routes:
+              - match:
+                  prefix: "/"
+                route:
+                  cluster: upstream_app_cluster
+                  
+          http_filters:
+          # --- VajraNetra Zero Trust ext_authz ---
+          - name: envoy.filters.http.ext_authz
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
+              http_service:
+                server_uri:
+                  uri: http://vajranetra-backend:8000
+                  cluster: vajranetra_auth_cluster
+                  timeout: 1.0s
+                path_prefix: /api/gateways/envoy/ext_authz
+                authorization_request:
+                  allowed_headers:
+                    patterns:
+                    - exact: cookie
+                    - exact: authorization
+                    - exact: x-forwarded-for
+                    - exact: user-agent
+                    - prefix: x-ztna-
+                authorization_response:
+                  allowed_upstream_headers:
+                    patterns:
+                    - prefix: x-forwarded-
+                    - prefix: x-ztna-
+                    - prefix: x-gateway-
+                    - exact: x-access-mode
+                    - exact: x-vajra-jwt-assertion
+                  allowed_client_headers:
+                    patterns:
+                    - exact: set-cookie
+                    - prefix: x-ztna-
+              failure_mode_allow: false
+              transport_api_version: V3
+
+          # --- VajraNetra Lua HTML Injector for Web SDK ---
+          - name: envoy.filters.http.lua
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+              default_source_code:
+                inline_string: |
+                  function envoy_on_response(response_handle)
+                    local headers = response_handle:headers()
+                    local content_type = headers:get("content-type")
+                    if content_type ~= nil and string.find(content_type, "text/html") then
+                      local body = response_handle:body()
+                      if body ~= nil then
+                        local size = body:length()
+                        if size > 0 then
+                          local body_string = body:getBytes(0, size)
+                          local sdk_script = "\n<!-- ZTNA Web SDK (Injected by Envoy Lua Edge) -->\n<script src=\"http://172.10.21.166:15173/sdk.js\"></script>\n"
+                          local final_body, count = string.gsub(body_string, "</head>", sdk_script .. "</head>", 1)
+                          if count > 0 then
+                             body:setBytes(final_body)
+                             headers:replace("content-length", tostring(string.len(final_body)))
+                          end
+                        end
+                      end
+                    end
+                  end
+
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+  - name: upstream_app_cluster
+    connect_timeout: 0.5s
+    type: LOGICAL_DNS
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: upstream_app_cluster
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: 172.10.23.57
+                port_value: 19000
+
+  - name: vajranetra_auth_cluster
+    connect_timeout: 0.5s
+    type: LOGICAL_DNS
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: vajranetra_auth_cluster
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: 172.10.21.166
+                port_value: 18000
