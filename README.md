@@ -26,7 +26,7 @@ Evaluates every request context dynamically:
   - Dispatches a stealth JSON alert to the ZTNA SOC and initiates an urgent voice alert call.
 - **Volatile RAM-Only Decryption & Burn-After-Reading:** On correct password, data is decrypted only into memory (RAM) and shredded immediately after viewing to prevent lingering files.
 
-### 3. 🚨 CIPHER02: Real-Time Insider Exfiltration Detection
+### 3. 🚨 CIPHER04: Real-Time Insider Exfiltration Detection
 - Detects unauthorized employee data movement as it happens across vectors:
   - USB mass storage attachments
   - Personal cloud drive sync uploads
